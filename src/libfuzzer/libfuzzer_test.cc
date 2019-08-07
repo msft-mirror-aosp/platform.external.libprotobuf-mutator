@@ -1,4 +1,4 @@
-// Copyright 2017 Google Inc. All rights reserved.
+// Copyright 2019 Google Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef SRC_RANDOM_H_
-#define SRC_RANDOM_H_
+#include "port/gtest.h"
+#include "src/libfuzzer/libfuzzer_macro.h"
+#include "src/mutator_test_proto2.pb.h"
 
-#include <random>
+static bool reached = false;
 
-namespace protobuf_mutator {
+DEFINE_PROTO_FUZZER(const protobuf_mutator::Msg::EmptyMessage& message) {
+  reached = true;
+}
 
-using RandomEngine = std::minstd_rand;
-
-}  // namespace protobuf_mutator
-
-#endif  // SRC_RANDOM_H_
+TEST(LibFuzzerTest, Basic) {
+  LLVMFuzzerTestOneInput((const uint8_t*)"", 0);
+  EXPECT_TRUE(reached);
+}
