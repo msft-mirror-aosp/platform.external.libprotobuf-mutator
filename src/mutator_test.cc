@@ -216,8 +216,13 @@ const char kRepeatedNestedFields[] = R"(
 
 class TestMutator : public Mutator {
  public:
-  explicit TestMutator(bool keep_initialized) : Mutator(&random_), random_(17) {
+  explicit TestMutator(bool keep_initialized,
+                       size_t random_to_default_ratio = 0)
+      : Mutator(&random_), random_(17) {
+    if (random_to_default_ratio)
+      random_to_default_ratio_ = random_to_default_ratio;
     keep_initialized_ = keep_initialized;
+    custom_mutations_.clear();
   }
 
   // Avoids dedup logic for some tests.
@@ -232,7 +237,7 @@ class TestMutator : public Mutator {
 
 class ReducedTestMutator : public TestMutator {
  public:
-  ReducedTestMutator() : TestMutator(false) {
+  ReducedTestMutator() : TestMutator(false, 4) {
     for (float i = 1000; i > 0.1; i /= 7) {
       values_.push_back(i);
       values_.push_back(-i);
@@ -255,13 +260,13 @@ class ReducedTestMutator : public TestMutator {
   double MutateDouble(double value) override { return GetRandomValue(); }
   std::string MutateString(const std::string& value,
                            size_t size_increase_hint) override {
-    return strings_[std::uniform_int_distribution<uint8_t>(
+    return strings_[std::uniform_int_distribution<>(
         0, strings_.size() - 1)(*random())];
   }
 
  private:
   float GetRandomValue() {
-    return values_[std::uniform_int_distribution<uint8_t>(
+    return values_[std::uniform_int_distribution<>(
         0, values_.size() - 1)(*random())];
   }
 
@@ -312,6 +317,7 @@ bool Mutate(const protobuf::Message& from, const protobuf::Message& to) {
   EXPECT_FALSE(MessageDifferencer::Equals(from, to));
   ReducedTestMutator mutator;
   std::unique_ptr<protobuf::Message> message(from.New());
+  EXPECT_FALSE(MessageDifferencer::Equals(from, to));
   for (int j = 0; j < 1000000; ++j) {
     message->CopyFrom(from);
     mutator.Mutate(message.get(), 1000);
@@ -337,16 +343,16 @@ class MutatorTest : public TestWithParam<TestParams> {
     EXPECT_TRUE(ParseTextMessage(text_, message));
   }
 
-  bool LoadWithoutLine(protobuf::Message* message) {
+  void LoadWithoutLine(protobuf::Message* message) {
     std::ostringstream oss;
     auto lines = Split(text_);
     for (size_t i = 0; i != lines.size(); ++i) {
       if (i != line_) oss << lines[i] << '\n';
     }
-    return ParseTextMessage(oss.str(), message);
+    EXPECT_TRUE(ParseTextMessage(oss.str(), message));
   }
 
-  bool LoadWithChangedLine(protobuf::Message* message, int value) {
+  void LoadWithChangedLine(protobuf::Message* message, int value) {
     auto lines = Split(text_);
     std::ostringstream oss;
     for (size_t i = 0; i != lines.size(); ++i) {
@@ -368,7 +374,7 @@ class MutatorTest : public TestWithParam<TestParams> {
         oss << s << '\n';
       }
     }
-    return ParseTextMessage(oss.str(), message);
+    EXPECT_TRUE(ParseTextMessage(oss.str(), message));
   }
 
   std::string text_;
@@ -381,11 +387,11 @@ class MutatorTest : public TestWithParam<TestParams> {
 // insertion/deletion.
 
 class MutatorFieldInsDelTest : public MutatorTest {};
-INSTANTIATE_TEST_CASE_P(Proto2, MutatorFieldInsDelTest,
-                        ValuesIn(GetFieldTestParams<Msg>(
-                            {kRequiredFields, kOptionalFields, kRepeatedFields,
-                             kRequiredNestedFields, kOptionalNestedFields,
-                             kRepeatedNestedFields})));
+INSTANTIATE_TEST_SUITE_P(Proto2, MutatorFieldInsDelTest,
+                         ValuesIn(GetFieldTestParams<Msg>(
+                             {kRequiredFields, kOptionalFields, kRepeatedFields,
+                              kRequiredNestedFields, kOptionalNestedFields,
+                              kRepeatedNestedFields})));
 
 TEST_P(MutatorFieldInsDelTest, DeleteField) {
   LoadMessage(m1_.get());
@@ -404,15 +410,15 @@ class MutatorFieldTest : public MutatorTest {
   template <class Msg>
   void TestCopyField();
 };
-INSTANTIATE_TEST_CASE_P(Proto2, MutatorFieldTest,
-                        ValuesIn(GetFieldTestParams<Msg>(
-                            {kRequiredFields, kOptionalFields, kRepeatedFields,
-                             kRequiredNestedFields, kOptionalNestedFields,
-                             kRepeatedNestedFields})));
-INSTANTIATE_TEST_CASE_P(Proto3, MutatorFieldTest,
-                        ValuesIn(GetFieldTestParams<Msg3>(
-                            {kOptionalFields, kRepeatedFields,
-                             kOptionalNestedFields, kRepeatedNestedFields})));
+INSTANTIATE_TEST_SUITE_P(Proto2, MutatorFieldTest,
+                         ValuesIn(GetFieldTestParams<Msg>(
+                             {kRequiredFields, kOptionalFields, kRepeatedFields,
+                              kRequiredNestedFields, kOptionalNestedFields,
+                              kRepeatedNestedFields})));
+INSTANTIATE_TEST_SUITE_P(Proto3, MutatorFieldTest,
+                         ValuesIn(GetFieldTestParams<Msg3>(
+                             {kOptionalFields, kRepeatedFields,
+                              kOptionalNestedFields, kRepeatedNestedFields})));
 
 TEST_P(MutatorFieldTest, Initialized) {
   LoadWithoutLine(m1_.get());
@@ -456,15 +462,18 @@ TEST_P(MutatorFieldTest, CopyField) {
 }
 
 class MutatorSingleFieldTest : public MutatorTest {};
-INSTANTIATE_TEST_CASE_P(Proto2, MutatorSingleFieldTest,
-                        ValuesIn(GetFieldTestParams<Msg>({
-                            kRequiredFields, kOptionalFields,
-                            kRequiredNestedFields, kOptionalNestedFields,
-                        })));
-INSTANTIATE_TEST_CASE_P(Proto3, MutatorSingleFieldTest,
-                        ValuesIn(GetFieldTestParams<Msg3>({
-                            kOptionalFields, kOptionalNestedFields,
-                        })));
+INSTANTIATE_TEST_SUITE_P(Proto2, MutatorSingleFieldTest,
+                         ValuesIn(GetFieldTestParams<Msg>({
+                             kRequiredFields,
+                             kOptionalFields,
+                             kRequiredNestedFields,
+                             kOptionalNestedFields,
+                         })));
+INSTANTIATE_TEST_SUITE_P(Proto3, MutatorSingleFieldTest,
+                         ValuesIn(GetFieldTestParams<Msg3>({
+                             kOptionalFields,
+                             kOptionalNestedFields,
+                         })));
 
 TEST_P(MutatorSingleFieldTest, CrossOver) {
   LoadWithoutLine(m1_.get());
@@ -554,7 +563,7 @@ TYPED_TEST(MutatorTypedTest, CrossOverRepeatedMessages) {
 TYPED_TEST(MutatorTypedTest, FailedMutations) {
   TestMutator mutator(false);
   size_t crossovers = 0;
-  for (int i = 0; i < 10000; ++i) {
+  for (int i = 0; i < 1000; ++i) {
     typename TestFixture::Message messages[2];
     typename TestFixture::Message tmp;
     for (int j = 0; j < 20; ++j) {
@@ -574,7 +583,44 @@ TYPED_TEST(MutatorTypedTest, FailedMutations) {
   }
 
   // CrossOver may fail but very rare.
-  EXPECT_LT(crossovers, 100u);
+  EXPECT_LT(crossovers, 10u);
+}
+
+TYPED_TEST(MutatorTypedTest, FieldMutator) {
+  constexpr char kInitialString[] = " ";
+  constexpr char kIndicatorString[] = "0123456789abcdef";
+  bool custom_mutation = false;
+  bool regular_mutation = false;
+
+  const protobuf::Descriptor* descriptor =
+    (typename TestFixture::Message()).GetDescriptor();
+  TestMutator mutator(false);
+  TestMutator::RegisterCustomMutation(
+      descriptor->FindFieldByName("optional_string"),
+      [kIndicatorString](protobuf::Message* message){
+        typename TestFixture::Message* test_message =
+            dynamic_cast<typename TestFixture::Message*>(message);
+        test_message->set_optional_string(kIndicatorString);
+      });
+
+  for (int j = 0; j < 100000; ++j) {
+    // Include this field to increase the probability of mutation.
+    typename TestFixture::Message message;
+    message.set_optional_string(kInitialString);
+    mutator.Mutate(&message, 1000);
+
+    if (message.optional_string() == kIndicatorString) {
+      custom_mutation = true;
+    } else if (message.optional_string() != kInitialString) {
+      regular_mutation = true;
+    }
+
+    if (custom_mutation && regular_mutation)
+      break;
+  }
+
+  EXPECT_TRUE(custom_mutation);
+  EXPECT_TRUE(regular_mutation);
 }
 
 TYPED_TEST(MutatorTypedTest, Serialization) {
@@ -594,10 +640,64 @@ TYPED_TEST(MutatorTypedTest, Serialization) {
   }
 }
 
+TYPED_TEST(MutatorTypedTest, DeepRecursion) {
+  typename TestFixture::Message message;
+  typename TestFixture::Message* last = &message;
+  for (int i = 0; i < 150; ++i) {
+    last = last->mutable_optional_msg();
+    std::string text = SaveMessageAsText(message);
+    std::string binary = SaveMessageAsBinary(message);
+    typename TestFixture::Message parsed;
+    EXPECT_EQ(i < 100, ParseTextMessage(SaveMessageAsText(message), &parsed));
+    EXPECT_EQ(i < 100,
+              ParseBinaryMessage(SaveMessageAsBinary(message), &parsed));
+  }
+}
+
+TYPED_TEST(MutatorTypedTest, EmptyMessage) {
+  typename TestFixture::Message::EmptyMessage message;
+  TestMutator mutator(false);
+  for (int j = 0; j < 10000; ++j) mutator.Mutate(&message, 1000);
+}
+
+TYPED_TEST(MutatorTypedTest, Regressions) {
+  typename TestFixture::Message::RegressionMessage message;
+  TestMutator mutator(false);
+  for (int j = 0; j < 10000; ++j) mutator.Mutate(&message, 1000);
+}
+
+TYPED_TEST(MutatorTypedTest, UsageExample) {
+  typename TestFixture::Message::SmallMessage message;
+  TestMutator mutator(false);
+
+  // Test that we can generate all variation of the message.
+  std::set<std::string> mutations;
+  for (int j = 0; j < 1000; ++j) {
+    mutator.Mutate(&message, 1000);
+    std::string str = SaveMessageAsText(message);
+    mutations.insert(str);
+  }
+
+  if (std::is_same<typename TestFixture::Message, Msg>::value) {
+    // 3 states for boolean and 5 for enum, including missing fields.
+    EXPECT_EQ(3u * 5u, mutations.size());
+  } else {
+    // 2 states for boolean and 4 for enum.
+    EXPECT_EQ(2u * 4u, mutations.size());
+  }
+}
+
+TYPED_TEST(MutatorTypedTest, Maps) {
+  TestMutator mutator(true);
+
+  typename TestFixture::Message::MapMessage message;
+  for (int j = 0; j < 10000; ++j) mutator.Mutate(&message, 1000);
+}
+
 class MutatorMessagesTest : public MutatorTest {};
-INSTANTIATE_TEST_CASE_P(Proto2, MutatorMessagesTest,
-                        ValuesIn(GetMessageTestParams<Msg>({kMessages})));
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(Proto2, MutatorMessagesTest,
+                         ValuesIn(GetMessageTestParams<Msg>({kMessages})));
+INSTANTIATE_TEST_SUITE_P(
     Proto3, MutatorMessagesTest,
     ValuesIn(GetMessageTestParams<Msg3>({kMessagesProto3})));
 
@@ -615,33 +715,15 @@ TEST_P(MutatorMessagesTest, InsertMessage) {
 
 // TODO(vitalybuka): Special tests for oneof.
 
-TEST(MutatorMessagesTest, UsageExample) {
-  SmallMessage message;
+TEST(MutatorMessagesTest, NeverCopyUnknownEnum) {
   TestMutator mutator(false);
-
-  // Test that we can generate all variation of the message.
-  std::set<std::string> mutations;
-  for (int j = 0; j < 1000; ++j) {
-    mutator.Mutate(&message, 1000);
-    std::string str = SaveMessageAsText(message);
-    mutations.insert(str);
+  for (int j = 0; j < 10000; ++j) {
+    Msg3 message;
+    message.set_optional_enum(Msg3::ENUM_5);
+    message.add_repeated_enum(static_cast<Msg3::Enum>(100));
+    mutator.Mutate(&message, 100);
+    EXPECT_NE(message.optional_enum(), 100);
   }
-
-  // 3 states for boolean and 5 for enum, including missing fields.
-  EXPECT_EQ(3u * 5u, mutations.size());
-}
-
-TEST(MutatorMessagesTest, EmptyMessage) {
-  EmptyMessage message;
-  TestMutator mutator(false);
-  for (int j = 0; j < 10000; ++j) mutator.Mutate(&message, 1000);
-}
-
-
-TEST(MutatorMessagesTest, Regressions) {
-  RegressionMessage message;
-  TestMutator mutator(false);
-  for (int j = 0; j < 10000; ++j) mutator.Mutate(&message, 1000);
 }
 
 }  // namespace protobuf_mutator
