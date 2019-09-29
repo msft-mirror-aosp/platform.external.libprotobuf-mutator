@@ -217,12 +217,11 @@ const char kRepeatedNestedFields[] = R"(
 class TestMutator : public Mutator {
  public:
   explicit TestMutator(bool keep_initialized,
-                       size_t random_to_default_ratio = 0)
-      : Mutator(&random_), random_(17) {
+                       size_t random_to_default_ratio = 0) {
+    Seed(17);
     if (random_to_default_ratio)
       random_to_default_ratio_ = random_to_default_ratio;
     keep_initialized_ = keep_initialized;
-    custom_mutations_.clear();
   }
 
   // Avoids dedup logic for some tests.
@@ -506,7 +505,7 @@ class MutatorTypedTest : public ::testing::Test {
 };
 
 using MutatorTypedTestTypes = testing::Types<Msg, Msg3>;
-TYPED_TEST_CASE(MutatorTypedTest, MutatorTypedTestTypes);
+TYPED_TEST_SUITE(MutatorTypedTest, MutatorTypedTestTypes);
 
 TYPED_TEST(MutatorTypedTest, CrossOverRepeated) {
   typename TestFixture::Message m1;
@@ -586,21 +585,18 @@ TYPED_TEST(MutatorTypedTest, FailedMutations) {
   EXPECT_LT(crossovers, 10u);
 }
 
-TYPED_TEST(MutatorTypedTest, FieldMutator) {
+TYPED_TEST(MutatorTypedTest, RegisterPostProcessor) {
   constexpr char kInitialString[] = " ";
   constexpr char kIndicatorString[] = "0123456789abcdef";
   bool custom_mutation = false;
   bool regular_mutation = false;
 
-  const protobuf::Descriptor* descriptor =
-    (typename TestFixture::Message()).GetDescriptor();
   TestMutator mutator(false);
-  TestMutator::RegisterCustomMutation(
-      descriptor->FindFieldByName("optional_string"),
-      [kIndicatorString](protobuf::Message* message){
+  mutator.RegisterPostProcessor(
+      [kIndicatorString](protobuf::Message* message, uint32_t seed) {
         typename TestFixture::Message* test_message =
-            dynamic_cast<typename TestFixture::Message*>(message);
-        test_message->set_optional_string(kIndicatorString);
+            static_cast<typename TestFixture::Message*>(message);
+        if (seed % 2) test_message->set_optional_string(kIndicatorString);
       });
 
   for (int j = 0; j < 100000; ++j) {
@@ -615,8 +611,7 @@ TYPED_TEST(MutatorTypedTest, FieldMutator) {
       regular_mutation = true;
     }
 
-    if (custom_mutation && regular_mutation)
-      break;
+    if (custom_mutation && regular_mutation) break;
   }
 
   EXPECT_TRUE(custom_mutation);
