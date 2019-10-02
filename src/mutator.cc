@@ -225,9 +225,10 @@ class MutationSampler {
         } else {
           if (reflection->HasField(*message, field) ||
               IsProto3SimpleField(*field)) {
-            if (field->cpp_type() != FieldDescriptor::CPPTYPE_MESSAGE)
+            if (field->cpp_type() != FieldDescriptor::CPPTYPE_MESSAGE) {
               sampler_.Try(kDefaultMutateWeight,
                            {{message, field}, Mutation::Mutate});
+            }
             if (!IsProto3SimpleField(*field) &&
                 (!field->is_required() || !keep_initialized_)) {
               sampler_.Try(kDefaultMutateWeight,
@@ -394,7 +395,7 @@ class FieldMutator {
     assert(*message);
     if (GetRandomBool(mutator_->random(), mutator_->random_to_default_ratio_))
       return;
-    mutator_->Mutate(message->get(), size_increase_hint_);
+    mutator_->MutateImpl(message->get(), size_increase_hint_);
   }
 
  private:
@@ -448,43 +449,43 @@ struct CreateField : public FieldFunction<CreateField> {
 
 }  // namespace
 
-Mutator::Mutator(RandomEngine* random) : random_(random) {}
+void Mutator::Seed(uint32_t value) { random_.seed(value); }
 
 void Mutator::Mutate(Message* message, size_t size_increase_hint) {
-  bool repeat;
-  do {
-    repeat = false;
-    MutationSampler mutation(keep_initialized_, random_, message);
-    switch (mutation.mutation()) {
-      case Mutation::None:
-        break;
-      case Mutation::Add:
-        CreateField()(mutation.field(), size_increase_hint / 2, this);
-        break;
-      case Mutation::Mutate:
-        if (!ApplyCustomMutations(message, mutation.field().descriptor())) {
-          MutateField()(mutation.field(), size_increase_hint / 2, this);
-        }
-        break;
-      case Mutation::Delete:
-        DeleteField()(mutation.field());
-        break;
-      case Mutation::Copy: {
-        DataSourceSampler source(mutation.field(), random_, message);
-        if (source.IsEmpty()) {
-          repeat = true;
-          break;
-        }
-        CopyField()(source.field(), mutation.field());
-        break;
-      }
-      default:
-        assert(false && "unexpected mutation");
-    }
-  } while (repeat);
+  MutateImpl(message, size_increase_hint);
 
   InitializeAndTrim(message, kMaxInitializeDepth);
   assert(!keep_initialized_ || message->IsInitialized());
+
+  if (post_process_) post_process_(message, random_());
+}
+
+void Mutator::MutateImpl(Message* message, size_t size_increase_hint) {
+  for (;;) {
+    MutationSampler mutation(keep_initialized_, &random_, message);
+    switch (mutation.mutation()) {
+      case Mutation::None:
+        return;
+      case Mutation::Add:
+        CreateField()(mutation.field(), size_increase_hint / 2, this);
+        return;
+      case Mutation::Mutate:
+        MutateField()(mutation.field(), size_increase_hint / 2, this);
+        return;
+      case Mutation::Delete:
+        DeleteField()(mutation.field());
+        return;
+      case Mutation::Copy: {
+        DataSourceSampler source(mutation.field(), &random_, message);
+        if (source.IsEmpty()) break;
+        CopyField()(source.field(), mutation.field());
+        return;
+      }
+      default:
+        assert(false && "unexpected mutation");
+        return;
+    }
+  }
 }
 
 void Mutator::CrossOver(const protobuf::Message& message1,
@@ -499,8 +500,9 @@ void Mutator::CrossOver(const protobuf::Message& message1,
   InitializeAndTrim(message2, kMaxInitializeDepth);
   assert(!keep_initialized_ || message2->IsInitialized());
 
+  if (post_process_) post_process_(message2, random_());
+
   // Can't call mutate from crossover because of a bug in libFuzzer.
-  return;
   // if (MessageDifferencer::Equals(*message2_copy, *message2) ||
   //     MessageDifferencer::Equals(message1, *message2)) {
   //   Mutate(message2, 0);
@@ -530,20 +532,20 @@ void Mutator::CrossOverImpl(const protobuf::Message& message1,
 
       // Shuffle
       for (int j = 0; j < field_size2; ++j) {
-        if (int k = GetRandomIndex(random_, field_size2 - j)) {
+        if (int k = GetRandomIndex(&random_, field_size2 - j)) {
           reflection->SwapElements(message2, field, j, j + k);
         }
       }
 
-      int keep = GetRandomIndex(random_, field_size2 + 1);
+      int keep = GetRandomIndex(&random_, field_size2 + 1);
 
       if (field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE) {
         int remove = field_size2 - keep;
         // Cross some message to keep with messages to remove.
-        int cross = GetRandomIndex(random_, std::min(keep, remove) + 1);
+        int cross = GetRandomIndex(&random_, std::min(keep, remove) + 1);
         for (int j = 0; j < cross; ++j) {
-          int k = GetRandomIndex(random_, keep);
-          int r = keep + GetRandomIndex(random_, remove);
+          int k = GetRandomIndex(&random_, keep);
+          int r = keep + GetRandomIndex(&random_, remove);
           assert(k != r);
           CrossOverImpl(reflection->GetRepeatedMessage(*message2, field, r),
                         reflection->MutableRepeatedMessage(message2, field, k));
@@ -556,10 +558,10 @@ void Mutator::CrossOverImpl(const protobuf::Message& message1,
 
     } else if (field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE) {
       if (!reflection->HasField(message1, field)) {
-        if (GetRandomBool(random_))
+        if (GetRandomBool(&random_))
           DeleteField()(FieldInstance(message2, field));
       } else if (!reflection->HasField(*message2, field)) {
-        if (GetRandomBool(random_)) {
+        if (GetRandomBool(&random_)) {
           ConstFieldInstance source(&message1, field);
           CopyField()(source, FieldInstance(message2, field));
         }
@@ -568,7 +570,7 @@ void Mutator::CrossOverImpl(const protobuf::Message& message1,
                       reflection->MutableMessage(message2, field));
       }
     } else {
-      if (GetRandomBool(random_)) {
+      if (GetRandomBool(&random_)) {
         if (reflection->HasField(message1, field)) {
           ConstFieldInstance source(&message1, field);
           CopyField()(source, FieldInstance(message2, field));
@@ -580,10 +582,9 @@ void Mutator::CrossOverImpl(const protobuf::Message& message1,
   }
 }
 
-void Mutator::RegisterCustomMutation(
-    const protobuf::FieldDescriptor* field,
-    std::function<void(protobuf::Message* message)> mutation) {
-  custom_mutations_[field].push_back(mutation);
+void Mutator::RegisterPostProcessor(PostProcess post_process) {
+  assert(!post_process_);
+  post_process_ = post_process;
 }
 
 void Mutator::InitializeAndTrim(Message* message, int max_depth) {
@@ -623,81 +624,59 @@ void Mutator::InitializeAndTrim(Message* message, int max_depth) {
   }
 }
 
-int32_t Mutator::MutateInt32(int32_t value) { return FlipBit(value, random_); }
+int32_t Mutator::MutateInt32(int32_t value) { return FlipBit(value, &random_); }
 
-int64_t Mutator::MutateInt64(int64_t value) { return FlipBit(value, random_); }
+int64_t Mutator::MutateInt64(int64_t value) { return FlipBit(value, &random_); }
 
 uint32_t Mutator::MutateUInt32(uint32_t value) {
-  return FlipBit(value, random_);
+  return FlipBit(value, &random_);
 }
 
 uint64_t Mutator::MutateUInt64(uint64_t value) {
-  return FlipBit(value, random_);
+  return FlipBit(value, &random_);
 }
 
-float Mutator::MutateFloat(float value) { return FlipBit(value, random_); }
+float Mutator::MutateFloat(float value) { return FlipBit(value, &random_); }
 
-double Mutator::MutateDouble(double value) { return FlipBit(value, random_); }
+double Mutator::MutateDouble(double value) { return FlipBit(value, &random_); }
 
 bool Mutator::MutateBool(bool value) { return !value; }
 
 size_t Mutator::MutateEnum(size_t index, size_t item_count) {
   if (item_count <= 1) return 0;
-  return (index + 1 + GetRandomIndex(random_, item_count - 1)) % item_count;
+  return (index + 1 + GetRandomIndex(&random_, item_count - 1)) % item_count;
 }
 
 std::string Mutator::MutateString(const std::string& value,
                                   size_t size_increase_hint) {
   std::string result = value;
 
-  while (!result.empty() && GetRandomBool(random_)) {
-    result.erase(GetRandomIndex(random_, result.size()), 1);
+  while (!result.empty() && GetRandomBool(&random_)) {
+    result.erase(GetRandomIndex(&random_, result.size()), 1);
   }
 
-  while (result.size() < size_increase_hint && GetRandomBool(random_)) {
-    size_t index = GetRandomIndex(random_, result.size() + 1);
-    result.insert(result.begin() + index, GetRandomIndex(random_, 1 << 8));
+  while (result.size() < size_increase_hint && GetRandomBool(&random_)) {
+    size_t index = GetRandomIndex(&random_, result.size() + 1);
+    result.insert(result.begin() + index, GetRandomIndex(&random_, 1 << 8));
   }
 
   if (result != value) return result;
 
   if (result.empty()) {
-    result.push_back(GetRandomIndex(random_, 1 << 8));
+    result.push_back(GetRandomIndex(&random_, 1 << 8));
     return result;
   }
 
   if (!result.empty())
-    FlipBit(result.size(), reinterpret_cast<uint8_t*>(&result[0]), random_);
+    FlipBit(result.size(), reinterpret_cast<uint8_t*>(&result[0]), &random_);
   return result;
 }
 
 std::string Mutator::MutateUtf8String(const std::string& value,
                                       size_t size_increase_hint) {
   std::string str = MutateString(value, size_increase_hint);
-  FixUtf8String(&str, random_);
+  FixUtf8String(&str, &random_);
   return str;
 }
-
-bool Mutator::ApplyCustomMutations(protobuf::Message* message,
-                                   const protobuf::FieldDescriptor* field) {
-  auto itr = custom_mutations_.find(field);
-  if (itr == custom_mutations_.end())
-    return false;
-
-  // Randomly select one of the registered mutators. The default behavior is
-  // performed for index 0.
-  size_t field_index = GetRandomIndex(random_, itr->second.size() + 1);
-  if (field_index == itr->second.size())
-    return false;
-
-  if (GetRandomBool(random_, 100))
-    itr->second[field_index](message);
-  return true;
-}
-
-std::unordered_map<
-    const protobuf::FieldDescriptor*,
-    std::vector<std::function<void(protobuf::Message* message)>>>
-    Mutator::custom_mutations_;
 
 }  // namespace protobuf_mutator

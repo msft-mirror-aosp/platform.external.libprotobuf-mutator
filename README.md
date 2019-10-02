@@ -1,10 +1,12 @@
 # libprotobuf-mutator
 
+[![TravisCI Build Status](https://travis-ci.org/google/libprotobuf-mutator.svg?branch=master)](https://travis-ci.org/google/libprotobuf-mutator)
+[![Fuzzing Status](https://oss-fuzz-build-logs.storage.googleapis.com/badges/libprotobuf-mutator.svg)](https://oss-fuzz-build-logs.storage.googleapis.com/index.html#libprotobuf-mutator)
+
 ## Overview
 libprotobuf-mutator is a library to randomly mutate
 [protobuffers](https://github.com/google/protobuf). <BR>
-It could be used together with guided
-fuzzing engines, such as [libFuzzer](http://libfuzzer.info).
+It could be used together with guided fuzzing engines, such as [libFuzzer](http://libfuzzer.info).
 
 ## Quick start on Debian/Ubuntu
 
@@ -13,7 +15,7 @@ Install prerequisites:
 ```
 sudo apt-get update
 sudo apt-get install protobuf-compiler libprotobuf-dev binutils cmake \
-  ninja-build liblzma-dev libz-dev pkg-config
+  ninja-build liblzma-dev libz-dev pkg-config autoconf libtool
 ```
 
 Compile and test everything:
