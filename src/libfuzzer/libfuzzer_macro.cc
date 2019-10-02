@@ -89,14 +89,18 @@ class BinaryOutputWriter : public OutputWriter {
   }
 };
 
+Mutator* GetMutator() {
+  static Mutator mutator;
+  return &mutator;
+}
+
 size_t MutateMessage(unsigned int seed, const InputReader& input,
                      OutputWriter* output, protobuf::Message* message) {
-  RandomEngine random(seed);
-  Mutator mutator(&random);
+  GetMutator()->Seed(seed);
   input.Read(message);
-  mutator.Mutate(message, output->size() > input.size()
-                              ? (output->size() - input.size())
-                              : 0);
+  GetMutator()->Mutate(message, output->size() > input.size()
+                                    ? (output->size() - input.size())
+                                    : 0);
   if (size_t new_size = output->Write(*message)) {
     assert(new_size <= output->size());
     return new_size;
@@ -108,11 +112,10 @@ size_t CrossOverMessages(unsigned int seed, const InputReader& input1,
                          const InputReader& input2, OutputWriter* output,
                          protobuf::Message* message1,
                          protobuf::Message* message2) {
-  RandomEngine random(seed);
-  Mutator mutator(&random);
+  GetMutator()->Seed(seed);
   input1.Read(message1);
   input2.Read(message2);
-  mutator.CrossOver(*message2, message1);
+  GetMutator()->CrossOver(*message2, message1);
   if (size_t new_size = output->Write(*message1)) {
     assert(new_size <= output->size());
     return new_size;
@@ -181,10 +184,10 @@ bool LoadProtoInput(bool binary, const uint8_t* data, size_t size,
                 : ParseTextMessage(data, size, input);
 }
 
-void RegisterProtoFieldMutator(
-    const protobuf::FieldDescriptor* field,
-    std::function<void(protobuf::Message*)> callback) {
-  protobuf_mutator::Mutator::RegisterCustomMutation(field, callback);
+void RegisterPostProcessorImpl(
+    std::function<void(protobuf::Message* message, unsigned int seed)>
+        callback) {
+  GetMutator()->RegisterPostProcessor(callback);
 }
 
 }  // namespace libfuzzer
