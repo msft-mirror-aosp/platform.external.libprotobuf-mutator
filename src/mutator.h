@@ -52,15 +52,13 @@ class Mutator {
   void Seed(uint32_t value);
 
   // message: message to mutate.
-  // size_increase_hint: approximate number of bytes which can be added to the
-  // message. Method does not guarantee that real result size increase will be
-  // less than the value. It only changes probabilities of mutations which can
-  // cause size increase. Caller could repeat mutation if result was larger than
-  // requested.
-  void Mutate(protobuf::Message* message, size_t size_increase_hint);
+  // max_size_hint: approximate max ByteSize() of resulting message. Method does
+  // not guarantee that real result will be strictly smaller than value. Caller
+  // could repeat mutation if result was larger than expected.
+  void Mutate(protobuf::Message* message, size_t max_size_hint);
 
-  void CrossOver(const protobuf::Message& message1,
-                 protobuf::Message* message2);
+  void CrossOver(const protobuf::Message& message1, protobuf::Message* message2,
+                 size_t max_size_hint);
 
   // Callback to postprocess mutations.
   // Implementation should use seed to initialize random number generators.
@@ -84,25 +82,25 @@ class Mutator {
   virtual bool MutateBool(bool value);
   virtual size_t MutateEnum(size_t index, size_t item_count);
   virtual std::string MutateString(const std::string& value,
-                                   size_t size_increase_hint);
-
-  std::unordered_map<const protobuf::Descriptor*, PostProcess> post_processors_;
+                                   int size_increase_hint);
 
   RandomEngine* random() { return &random_; }
 
  private:
   friend class FieldMutator;
   friend class TestMutator;
-  void InitializeAndTrim(protobuf::Message* message, int max_depth);
-  void MutateImpl(protobuf::Message* message, size_t size_increase_hint);
-  void CrossOverImpl(const protobuf::Message& message1,
-                     protobuf::Message* message2);
+  bool MutateImpl(const std::vector<const protobuf::Message*>& sources,
+                  const std::vector<protobuf::Message*>& messages,
+                  bool copy_clone_only, int size_increase_hint);
   std::string MutateUtf8String(const std::string& value,
-                               size_t size_increase_hint);
-  void ApplyPostProcessing(protobuf::Message* message);
+                               int size_increase_hint);
+  bool IsInitialized(const protobuf::Message& message) const;
   bool keep_initialized_ = true;
   size_t random_to_default_ratio_ = 100;
   RandomEngine random_;
+  using PostProcessors =
+      std::unordered_multimap<const protobuf::Descriptor*, PostProcess>;
+  PostProcessors post_processors_;
 };
 
 }  // namespace protobuf_mutator
