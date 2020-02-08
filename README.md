@@ -62,11 +62,11 @@ To apply one mutation to a protobuf object do the following:
 ```
 class MyProtobufMutator : public protobuf_mutator::Mutator {
  public:
-  MyProtobufMutator(uint32_t seed) : protobuf_mutator::Mutator(seed) {}
   // Optionally redefine the Mutate* methods to perform more sophisticated mutations.
 }
 void Mutate(MyMessage* message) {
-  MyProtobufMutator mutator(my_random_seed);
+  MyProtobufMutator mutator;
+  mutator.Seed(my_random_seed);
   mutator.Mutate(message, 200);
 }
 ```
@@ -94,23 +94,43 @@ is going to be rejected by fuzzed code. E.g. code may expect consistency between
 or it may use some fields as checksums. Such constraints are going to be significant bottleneck
 for fuzzer even if it's capable of inserting acceptable values with time.
 
-PostProcessorRegistration can be used to avoid such issue and guide your fuzzer towards interesing
+PostProcessorRegistration can be used to avoid such issue and guide your fuzzer towards interesting
 code. It registers callback which will be called for each message of particular type after each mutation.
 
 ```
 DEFINE_PROTO_FUZZER(const MyMessageType& input) {
   static PostProcessorRegistration reg = {
       [](MyMessageType* message, unsigned int seed) {
-        TweakMyMessageType(message, seed);
+        TweakMyMessage(message, seed);
       }};
 
   // Code which needs to be fuzzed.
   ConsumeMyMessageType(input);
 }
 ```
-
 Optional: Use seed if callback uses random numbers. It may help later with debugging.
 
+Note: You can add callback for any nested message and you can add multiple callbacks for
+the same message type.
+```
+DEFINE_PROTO_FUZZER(const MyMessageType& input) {
+  static PostProcessorRegistration reg1 = {
+      [](MyMessageType* message, unsigned int seed) {
+        TweakMyMessage(message, seed);
+      }};
+  static PostProcessorRegistration reg2 = {
+      [](MyMessageType* message, unsigned int seed) {
+        DifferentTweakMyMessage(message, seed);
+      }};
+  static PostProcessorRegistration reg_nested = {
+      [](MyMessageType::Nested* message, unsigned int seed) {
+        TweakMyNestedMessage(message, seed);
+      }};
+
+  // Code which needs to be fuzzed.
+  ConsumeMyMessageType(input);
+}
+```
 ## UTF-8 strings
 "proto2" and "proto3" handle invalid UTF-8 strings differently. In both cases
 string should be UTF-8, however only "proto3" enforces that. So if fuzzer is
