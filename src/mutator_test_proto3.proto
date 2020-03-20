@@ -1,5 +1,8 @@
 syntax = "proto3";
+
 package protobuf_mutator;
+
+import "google/protobuf/any.proto";
 
 message Msg3 {
   enum Enum {
@@ -13,6 +16,10 @@ message Msg3 {
     ENUM_7 = 7;
     ENUM_8 = 8;
     ENUM_9 = 9;
+  }
+
+  message SubMsg {
+    int64 optional_int64 = 1;
   }
 
   double optional_double = 18;
@@ -71,6 +78,8 @@ message Msg3 {
     Msg3 oneof_msg = 68;
   }
 
+  SubMsg sub_message = 69;
+
   message EmptyMessage {}
 
   message RegressionMessage {
@@ -94,4 +103,6 @@ message Msg3 {
     map<string, int32> map1 = 1;
     map<int32, Msg3> map2 = 2;
   }
+
+  google.protobuf.Any any = 90;
 }
