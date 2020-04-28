@@ -15,10 +15,10 @@
 #include "src/mutator.h"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <random>
 #include <string>
-#include <vector>
 
 #include "src/field_instance.h"
 #include "src/utf8_fix.h"
@@ -120,18 +120,15 @@ struct AppendField : public FieldFunction<AppendField> {
   }
 };
 
-class CanCopyAndDifferentField
-    : public FieldFunction<CanCopyAndDifferentField, bool> {
+class IsEqualValueField : public FieldFunction<IsEqualValueField, bool> {
  public:
   template <class T>
-  bool ForType(const ConstFieldInstance& src,
-               const ConstFieldInstance& dst) const {
-    T s;
-    src.Load(&s);
-    if (!dst.CanStore(s)) return false;
-    T d;
-    dst.Load(&d);
-    return !IsEqual(s, d);
+  bool ForType(const ConstFieldInstance& a, const ConstFieldInstance& b) const {
+    T aa;
+    a.Load(&aa);
+    T bb;
+    b.Load(&bb);
+    return IsEqual(aa, bb);
   }
 
  private:
@@ -225,10 +222,9 @@ class MutationSampler {
         } else {
           if (reflection->HasField(*message, field) ||
               IsProto3SimpleField(*field)) {
-            if (field->cpp_type() != FieldDescriptor::CPPTYPE_MESSAGE) {
+            if (field->cpp_type() != FieldDescriptor::CPPTYPE_MESSAGE)
               sampler_.Try(kDefaultMutateWeight,
                            {{message, field}, Mutation::Mutate});
-            }
             if (!IsProto3SimpleField(*field) &&
                 (!field->is_required() || !keep_initialized_)) {
               sampler_.Try(kDefaultMutateWeight,
@@ -316,14 +312,15 @@ class DataSourceSampler {
         if (int field_size = reflection->FieldSize(*message, field)) {
           ConstFieldInstance source(message, field,
                                     GetRandomIndex(random_, field_size));
-          if (CanCopyAndDifferentField()(source, match_))
+          if (match_.EnforceUtf8() && !source.EnforceUtf8()) continue;
+          if (!IsEqualValueField()(match_, source))
             sampler_.Try(field_size, source);
         }
       } else {
         if (reflection->HasField(*message, field)) {
           ConstFieldInstance source(message, field);
-          if (CanCopyAndDifferentField()(source, match_))
-            sampler_.Try(1, source);
+          if (match_.EnforceUtf8() && !source.EnforceUtf8()) continue;
+          if (!IsEqualValueField()(match_, source)) sampler_.Try(1, source);
         }
       }
     }
@@ -371,12 +368,13 @@ class FieldMutator {
   }
 
   void Mutate(bool* value) const {
-    RepeatMutate(value, std::bind(&Mutator::MutateBool, mutator_, _1));
+    RepeatMutate(value, std::bind(&Mutator::MutateBool, mutator_, _1), 2);
   }
 
   void Mutate(FieldInstance::Enum* value) const {
     RepeatMutate(&value->index,
-                 std::bind(&Mutator::MutateEnum, mutator_, _1, value->count));
+                 std::bind(&Mutator::MutateEnum, mutator_, _1, value->count),
+                 std::max<size_t>(value->count, 1));
     assert(value->index < value->count);
   }
 
@@ -393,16 +391,16 @@ class FieldMutator {
   void Mutate(std::unique_ptr<Message>* message) const {
     assert(!enforce_changes_);
     assert(*message);
-    if (GetRandomBool(mutator_->random(), mutator_->random_to_default_ratio_))
-      return;
-    mutator_->MutateImpl(message->get(), size_increase_hint_);
+    if (GetRandomBool(mutator_->random(), 100)) return;
+    mutator_->Mutate(message->get(), size_increase_hint_);
   }
 
  private:
   template <class T, class F>
-  void RepeatMutate(T* value, F mutate) const {
+  void RepeatMutate(T* value, F mutate,
+                    size_t unchanged_one_out_of = 100) const {
     if (!enforce_changes_ &&
-        GetRandomBool(mutator_->random(), mutator_->random_to_default_ratio_)) {
+        GetRandomBool(mutator_->random(), unchanged_one_out_of)) {
       return;
     }
     T tmp = *value;
@@ -449,43 +447,41 @@ struct CreateField : public FieldFunction<CreateField> {
 
 }  // namespace
 
-void Mutator::Seed(uint32_t value) { random_.seed(value); }
+Mutator::Mutator(RandomEngine* random) : random_(random) {}
 
 void Mutator::Mutate(Message* message, size_t size_increase_hint) {
-  MutateImpl(message, size_increase_hint);
-
-  InitializeAndTrim(message, kMaxInitializeDepth);
-  assert(!keep_initialized_ || message->IsInitialized());
-
-  if (post_process_) post_process_(message, random_());
-}
-
-void Mutator::MutateImpl(Message* message, size_t size_increase_hint) {
-  for (;;) {
-    MutationSampler mutation(keep_initialized_, &random_, message);
+  bool repeat;
+  do {
+    repeat = false;
+    MutationSampler mutation(keep_initialized_, random_, message);
     switch (mutation.mutation()) {
       case Mutation::None:
-        return;
+        break;
       case Mutation::Add:
         CreateField()(mutation.field(), size_increase_hint / 2, this);
-        return;
+        break;
       case Mutation::Mutate:
         MutateField()(mutation.field(), size_increase_hint / 2, this);
-        return;
+        break;
       case Mutation::Delete:
         DeleteField()(mutation.field());
-        return;
+        break;
       case Mutation::Copy: {
-        DataSourceSampler source(mutation.field(), &random_, message);
-        if (source.IsEmpty()) break;
+        DataSourceSampler source(mutation.field(), random_, message);
+        if (source.IsEmpty()) {
+          repeat = true;
+          break;
+        }
         CopyField()(source.field(), mutation.field());
-        return;
+        break;
       }
       default:
         assert(false && "unexpected mutation");
-        return;
     }
-  }
+  } while (repeat);
+
+  InitializeAndTrim(message, kMaxInitializeDepth);
+  assert(!keep_initialized_ || message->IsInitialized());
 }
 
 void Mutator::CrossOver(const protobuf::Message& message1,
@@ -500,9 +496,8 @@ void Mutator::CrossOver(const protobuf::Message& message1,
   InitializeAndTrim(message2, kMaxInitializeDepth);
   assert(!keep_initialized_ || message2->IsInitialized());
 
-  if (post_process_) post_process_(message2, random_());
-
   // Can't call mutate from crossover because of a bug in libFuzzer.
+  return;
   // if (MessageDifferencer::Equals(*message2_copy, *message2) ||
   //     MessageDifferencer::Equals(message1, *message2)) {
   //   Mutate(message2, 0);
@@ -532,20 +527,20 @@ void Mutator::CrossOverImpl(const protobuf::Message& message1,
 
       // Shuffle
       for (int j = 0; j < field_size2; ++j) {
-        if (int k = GetRandomIndex(&random_, field_size2 - j)) {
+        if (int k = GetRandomIndex(random_, field_size2 - j)) {
           reflection->SwapElements(message2, field, j, j + k);
         }
       }
 
-      int keep = GetRandomIndex(&random_, field_size2 + 1);
+      int keep = GetRandomIndex(random_, field_size2 + 1);
 
       if (field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE) {
         int remove = field_size2 - keep;
         // Cross some message to keep with messages to remove.
-        int cross = GetRandomIndex(&random_, std::min(keep, remove) + 1);
+        int cross = GetRandomIndex(random_, std::min(keep, remove) + 1);
         for (int j = 0; j < cross; ++j) {
-          int k = GetRandomIndex(&random_, keep);
-          int r = keep + GetRandomIndex(&random_, remove);
+          int k = GetRandomIndex(random_, keep);
+          int r = keep + GetRandomIndex(random_, remove);
           assert(k != r);
           CrossOverImpl(reflection->GetRepeatedMessage(*message2, field, r),
                         reflection->MutableRepeatedMessage(message2, field, k));
@@ -558,10 +553,10 @@ void Mutator::CrossOverImpl(const protobuf::Message& message1,
 
     } else if (field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE) {
       if (!reflection->HasField(message1, field)) {
-        if (GetRandomBool(&random_))
+        if (GetRandomBool(random_))
           DeleteField()(FieldInstance(message2, field));
       } else if (!reflection->HasField(*message2, field)) {
-        if (GetRandomBool(&random_)) {
+        if (GetRandomBool(random_)) {
           ConstFieldInstance source(&message1, field);
           CopyField()(source, FieldInstance(message2, field));
         }
@@ -570,7 +565,7 @@ void Mutator::CrossOverImpl(const protobuf::Message& message1,
                       reflection->MutableMessage(message2, field));
       }
     } else {
-      if (GetRandomBool(&random_)) {
+      if (GetRandomBool(random_)) {
         if (reflection->HasField(message1, field)) {
           ConstFieldInstance source(&message1, field);
           CopyField()(source, FieldInstance(message2, field));
@@ -582,21 +577,14 @@ void Mutator::CrossOverImpl(const protobuf::Message& message1,
   }
 }
 
-void Mutator::RegisterPostProcessor(PostProcess post_process) {
-  assert(!post_process_);
-  post_process_ = post_process;
-}
-
 void Mutator::InitializeAndTrim(Message* message, int max_depth) {
   const Descriptor* descriptor = message->GetDescriptor();
   const Reflection* reflection = message->GetReflection();
   for (int i = 0; i < descriptor->field_count(); ++i) {
     const FieldDescriptor* field = descriptor->field(i);
-    if (keep_initialized_ &&
-        (field->is_required() || descriptor->options().map_entry()) &&
-        !reflection->HasField(*message, field)) {
+    if (keep_initialized_ && field->is_required() &&
+        !reflection->HasField(*message, field))
       CreateDefaultField()(FieldInstance(message, field));
-    }
 
     if (field->cpp_type() == FieldDescriptor::CPPTYPE_MESSAGE) {
       if (max_depth <= 0 && !field->is_required()) {
@@ -624,58 +612,58 @@ void Mutator::InitializeAndTrim(Message* message, int max_depth) {
   }
 }
 
-int32_t Mutator::MutateInt32(int32_t value) { return FlipBit(value, &random_); }
+int32_t Mutator::MutateInt32(int32_t value) { return FlipBit(value, random_); }
 
-int64_t Mutator::MutateInt64(int64_t value) { return FlipBit(value, &random_); }
+int64_t Mutator::MutateInt64(int64_t value) { return FlipBit(value, random_); }
 
 uint32_t Mutator::MutateUInt32(uint32_t value) {
-  return FlipBit(value, &random_);
+  return FlipBit(value, random_);
 }
 
 uint64_t Mutator::MutateUInt64(uint64_t value) {
-  return FlipBit(value, &random_);
+  return FlipBit(value, random_);
 }
 
-float Mutator::MutateFloat(float value) { return FlipBit(value, &random_); }
+float Mutator::MutateFloat(float value) { return FlipBit(value, random_); }
 
-double Mutator::MutateDouble(double value) { return FlipBit(value, &random_); }
+double Mutator::MutateDouble(double value) { return FlipBit(value, random_); }
 
 bool Mutator::MutateBool(bool value) { return !value; }
 
 size_t Mutator::MutateEnum(size_t index, size_t item_count) {
   if (item_count <= 1) return 0;
-  return (index + 1 + GetRandomIndex(&random_, item_count - 1)) % item_count;
+  return (index + 1 + GetRandomIndex(random_, item_count - 1)) % item_count;
 }
 
 std::string Mutator::MutateString(const std::string& value,
                                   size_t size_increase_hint) {
   std::string result = value;
 
-  while (!result.empty() && GetRandomBool(&random_)) {
-    result.erase(GetRandomIndex(&random_, result.size()), 1);
+  while (!result.empty() && GetRandomBool(random_)) {
+    result.erase(GetRandomIndex(random_, result.size()), 1);
   }
 
-  while (result.size() < size_increase_hint && GetRandomBool(&random_)) {
-    size_t index = GetRandomIndex(&random_, result.size() + 1);
-    result.insert(result.begin() + index, GetRandomIndex(&random_, 1 << 8));
+  while (result.size() < size_increase_hint && GetRandomBool(random_)) {
+    size_t index = GetRandomIndex(random_, result.size() + 1);
+    result.insert(result.begin() + index, GetRandomIndex(random_, 1 << 8));
   }
 
   if (result != value) return result;
 
   if (result.empty()) {
-    result.push_back(GetRandomIndex(&random_, 1 << 8));
+    result.push_back(GetRandomIndex(random_, 1 << 8));
     return result;
   }
 
   if (!result.empty())
-    FlipBit(result.size(), reinterpret_cast<uint8_t*>(&result[0]), &random_);
+    FlipBit(result.size(), reinterpret_cast<uint8_t*>(&result[0]), random_);
   return result;
 }
 
 std::string Mutator::MutateUtf8String(const std::string& value,
                                       size_t size_increase_hint) {
   std::string str = MutateString(value, size_increase_hint);
-  FixUtf8String(&str, &random_);
+  FixUtf8String(&str, random_);
   return str;
 }
 

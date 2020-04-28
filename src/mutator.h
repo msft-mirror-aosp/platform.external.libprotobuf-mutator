@@ -18,12 +18,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include <functional>
 #include <memory>
 #include <random>
 #include <string>
-#include <unordered_map>
-#include <vector>
 
 #include "port/protobuf.h"
 #include "src/random.h"
@@ -45,11 +42,8 @@ namespace protobuf_mutator {
 class Mutator {
  public:
   // seed: value to initialize random number generator.
-  Mutator() = default;
+  explicit Mutator(RandomEngine* random);
   virtual ~Mutator() = default;
-
-  // Initialized internal random number generator.
-  void Seed(uint32_t value);
 
   // message: message to mutate.
   // size_increase_hint: approximate number of bytes which can be added to the
@@ -61,16 +55,6 @@ class Mutator {
 
   void CrossOver(const protobuf::Message& message1,
                  protobuf::Message* message2);
-
-  // Callback to postprocess mutations.
-  // Implementation should use seed to initialize random number generators.
-  using PostProcess =
-      std::function<void(protobuf::Message* message, unsigned int seed)>;
-
-  // Register callback which will be called after every message mutation.
-  // In this callback fuzzer may adjust content of the message or mutate some
-  // fields in some fuzzer specific way.
-  void RegisterPostProcessor(PostProcess post_process);
 
  protected:
   // TODO(vitalybuka): Consider to replace with single mutate (uint8_t*, size).
@@ -85,23 +69,23 @@ class Mutator {
   virtual std::string MutateString(const std::string& value,
                                    size_t size_increase_hint);
 
-  RandomEngine* random() { return &random_; }
+  // TODO(vitalybuka): Allow user to control proto level mutations:
+  //   * Callbacks to recursive traversal.
+  //   * Callbacks for particular proto level mutations.
+
+  RandomEngine* random() { return random_; }
 
  private:
   friend class FieldMutator;
   friend class TestMutator;
   void InitializeAndTrim(protobuf::Message* message, int max_depth);
-  void MutateImpl(protobuf::Message* message, size_t size_increase_hint);
   void CrossOverImpl(const protobuf::Message& message1,
                      protobuf::Message* message2);
   std::string MutateUtf8String(const std::string& value,
                                size_t size_increase_hint);
-  bool ApplyCustomMutations(protobuf::Message* message,
-                            const protobuf::FieldDescriptor* field);
+
   bool keep_initialized_ = true;
-  size_t random_to_default_ratio_ = 100;
-  RandomEngine random_;
-  PostProcess post_process_;
+  RandomEngine* random_;
 };
 
 }  // namespace protobuf_mutator

@@ -89,18 +89,14 @@ class BinaryOutputWriter : public OutputWriter {
   }
 };
 
-Mutator* GetMutator() {
-  static Mutator mutator;
-  return &mutator;
-}
-
 size_t MutateMessage(unsigned int seed, const InputReader& input,
                      OutputWriter* output, protobuf::Message* message) {
-  GetMutator()->Seed(seed);
+  RandomEngine random(seed);
+  Mutator mutator(&random);
   input.Read(message);
-  GetMutator()->Mutate(message, output->size() > input.size()
-                                    ? (output->size() - input.size())
-                                    : 0);
+  mutator.Mutate(message, output->size() > input.size()
+                              ? (output->size() - input.size())
+                              : 0);
   if (size_t new_size = output->Write(*message)) {
     assert(new_size <= output->size());
     return new_size;
@@ -112,10 +108,11 @@ size_t CrossOverMessages(unsigned int seed, const InputReader& input1,
                          const InputReader& input2, OutputWriter* output,
                          protobuf::Message* message1,
                          protobuf::Message* message2) {
-  GetMutator()->Seed(seed);
+  RandomEngine random(seed);
+  Mutator mutator(&random);
   input1.Read(message1);
   input2.Read(message2);
-  GetMutator()->CrossOver(*message2, message1);
+  mutator.CrossOver(*message2, message1);
   if (size_t new_size = output->Write(*message1)) {
     assert(new_size <= output->size());
     return new_size;
@@ -182,12 +179,6 @@ bool LoadProtoInput(bool binary, const uint8_t* data, size_t size,
                     protobuf::Message* input) {
   return binary ? ParseBinaryMessage(data, size, input)
                 : ParseTextMessage(data, size, input);
-}
-
-void RegisterPostProcessorImpl(
-    std::function<void(protobuf::Message* message, unsigned int seed)>
-        callback) {
-  GetMutator()->RegisterPostProcessor(callback);
 }
 
 }  // namespace libfuzzer

@@ -17,7 +17,6 @@
 
 #include <string>
 
-#include "google/protobuf/descriptor.pb.h"
 #include "google/protobuf/message.h"
 #include "google/protobuf/text_format.h"
 #include "google/protobuf/util/message_differencer.h"
