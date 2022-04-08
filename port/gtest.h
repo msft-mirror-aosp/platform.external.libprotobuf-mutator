@@ -15,7 +15,6 @@
 #ifndef PORT_GTEST_H_
 #define PORT_GTEST_H_
 
-#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 #endif  // PORT_GTEST_H_
