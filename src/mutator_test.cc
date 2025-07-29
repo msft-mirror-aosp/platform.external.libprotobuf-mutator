@@ -29,6 +29,7 @@
 
 namespace protobuf_mutator {
 
+using protobuf::DownCastMessage;
 using protobuf::util::MessageDifferencer;
 using testing::TestWithParam;
 using testing::ValuesIn;
@@ -622,7 +623,7 @@ TYPED_TEST(MutatorTypedTest, RegisterPostProcessor) {
         TestFixture::Message::descriptor(),
         [=](protobuf::Message* message, unsigned int seed) {
           auto test_message =
-              static_cast<typename TestFixture::Message*>(message);
+              DownCastMessage<typename TestFixture::Message>(message);
           if (seed % 2) test_message->set_optional_string(v);
         });
   }
@@ -677,12 +678,16 @@ TYPED_TEST(MutatorTypedTest, Serialization) {
 }
 
 TYPED_TEST(MutatorTypedTest, UnknownFieldTextFormat) {
+  if (!TextParserCanAllowUnknownField())
+    GTEST_SKIP() << "TextFormat::Parser::AllowUnknownField() is not available";
   typename TestFixture::Message parsed;
   EXPECT_TRUE(ParseTextMessage(kUnknownFieldInput, &parsed));
   EXPECT_EQ(SaveMessageAsText(parsed), kUnknownFieldExpected);
 }
 
 TYPED_TEST(MutatorTypedTest, DeepRecursion) {
+  if (!TextParserCanSetRecursionLimit())
+    GTEST_SKIP() << "TextFormat::Parser::SetRecursionLimit() is not available";
   typename TestFixture::Message message;
   typename TestFixture::Message* last = &message;
   for (int i = 0; i < 150; ++i) {
