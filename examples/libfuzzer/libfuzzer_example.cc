@@ -19,8 +19,6 @@
 #include "port/protobuf.h"
 #include "src/libfuzzer/libfuzzer_macro.h"
 
-protobuf_mutator::protobuf::LogSilencer log_silincer;
-
 template <class Proto>
 using PostProcessor =
     protobuf_mutator::libfuzzer::PostProcessorRegistration<Proto>;
@@ -33,7 +31,7 @@ static PostProcessor<libfuzzer_example::Msg> reg1 = {
 
 static PostProcessor<google::protobuf::Any> reg2 = {
     [](google::protobuf::Any* any, unsigned int seed) {
-      // Guide mutator to usefull 'Any' types.
+      // Guide mutator to useful 'Any' types.
       static const char* const expected_types[] = {
           "type.googleapis.com/google.protobuf.DescriptorProto",
           "type.googleapis.com/google.protobuf.FileDescriptorProto",
